@@ -11,6 +11,8 @@ import numpy as np
 from typing import Optional, Tuple, Union, List
 import timm
 import warnings
+
+from torchvision import transforms
 warnings.filterwarnings("ignore")
 
 

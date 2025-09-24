@@ -1,0 +1,72 @@
+# GeoCLIP Project Requirements
+# 核心深度学习框架
+torch>=1.12.0
+torchvision>=0.13.0
+torchaudio>=0.12.0
+
+# 深度学习模型库
+timm>=0.6.0
+transformers>=4.20.0
+
+# 计算机视觉
+opencv-python>=4.6.0
+Pillow>=9.0.0
+
+# 科学计算
+numpy>=1.21.0
+scipy>=1.9.0
+
+# 机器学习
+scikit-learn>=1.1.0
+
+# 数据处理
+pandas>=1.4.0
+
+# 可视化
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# 进度条
+tqdm>=4.64.0
+
+# 配置文件处理
+PyYAML>=6.0
+
+# 实验跟踪 (可选)
+wandb>=0.13.0
+
+# 3D处理 (可选，用于高级体素处理)
+scikit-image>=0.19.0
+
+# 网络请求
+requests>=2.28.0
+
+# 类型提示
+typing-extensions>=4.0.0
+
+# 数据集处理
+h5py>=3.7.0
+
+# 并行处理
+joblib>=1.1.0
+
+# 文件操作
+pathlib2>=2.3.0; python_version<"3.4"
+
+# JSON处理增强
+ujson>=5.4.0
+
+# 内存优化
+psutil>=5.9.0
+
+# 测试框架 (开发用)
+pytest>=7.0.0
+pytest-cov>=3.0.0
+
+# 代码质量 (开发用)
+flake8>=4.0.0
+black>=22.0.0
+
+# 文档生成 (开发用)
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.0.0

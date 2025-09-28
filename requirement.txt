@@ -1,72 +1,74 @@
 # GeoCLIP Project Requirements
+# 兼容 PyTorch 1.10.0 和 NumPy 1.22.3
+
 # 核心深度学习框架
-torch>=1.12.0
-torchvision>=0.13.0
-torchaudio>=0.12.0
+torch==1.10.0
+torchvision==0.11.1  # 与 torch 1.10.0 配套版本
+torchaudio==0.10.0   # 与 torch 1.10.0 配套版本
 
 # 深度学习模型库
-timm>=0.6.0
-transformers>=4.20.0
+timm==0.6.12         # 兼容 torch 1.10.0
+transformers==4.21.3 # 兼容版本，支持较老的 torch
 
 # 计算机视觉
-opencv-python>=4.6.0
-Pillow>=9.0.0
+opencv-python==4.5.5.64
+Pillow==9.2.0        # 稳定版本，避免安全问题
 
 # 科学计算
-numpy>=1.21.0
-scipy>=1.9.0
+numpy==1.22.3
+scipy==1.9.3         # 兼容 numpy 1.22.3
 
 # 机器学习
-scikit-learn>=1.1.0
+scikit-learn==1.1.3  # 兼容 numpy 1.22.3
 
 # 数据处理
-pandas>=1.4.0
+pandas==1.5.1        # 兼容 numpy 1.22.3
 
 # 可视化
-matplotlib>=3.5.0
-seaborn>=0.11.0
+matplotlib==3.5.3    # 兼容 numpy 1.22.3
+seaborn==0.11.2      # 兼容版本
 
 # 进度条
-tqdm>=4.64.0
+tqdm==4.64.1
 
 # 配置文件处理
-PyYAML>=6.0
+PyYAML==6.0
 
 # 实验跟踪 (可选)
-wandb>=0.13.0
+wandb==0.13.10       # 较稳定版本
 
 # 3D处理 (可选，用于高级体素处理)
-scikit-image>=0.19.0
+scikit-image==0.19.3 # 兼容 numpy 1.22.3
 
 # 网络请求
-requests>=2.28.0
+requests==2.28.2
 
 # 类型提示
-typing-extensions>=4.0.0
+typing-extensions==4.4.0
 
 # 数据集处理
-h5py>=3.7.0
+h5py==3.7.0
 
 # 并行处理
-joblib>=1.1.0
+joblib==1.2.0
 
-# 文件操作
-pathlib2>=2.3.0; python_version<"3.4"
+# 文件操作 (Python >= 3.4 已内置 pathlib)
+# pathlib2>=2.3.0; python_version<"3.4"  # 注释掉，现代环境不需要
 
 # JSON处理增强
-ujson>=5.4.0
+ujson==5.6.0
 
 # 内存优化
-psutil>=5.9.0
+psutil==5.9.4
 
 # 测试框架 (开发用)
-pytest>=7.0.0
-pytest-cov>=3.0.0
+pytest==7.2.0
+pytest-cov==4.0.0
 
 # 代码质量 (开发用)
-flake8>=4.0.0
-black>=22.0.0
+flake8==5.0.4
+black==22.12.0
 
 # 文档生成 (开发用)
-sphinx>=5.0.0
-sphinx-rtd-theme>=1.0.0
+sphinx==5.3.0
+sphinx-rtd-theme==1.2.0

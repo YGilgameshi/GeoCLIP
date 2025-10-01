@@ -223,7 +223,7 @@ def validate_geoclip_integration():
         }
 
         model = create_geoclip_model(model_config)
-        test_batch = {'image': torch.randn(1, 3, 224, 224)}
+        test_batch = {'image': torch.randn(1, 3, 384, 384)}
 
         with torch.no_grad():
             results = model(test_batch)

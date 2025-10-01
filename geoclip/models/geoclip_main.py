@@ -386,7 +386,10 @@ class GeoCLIP(nn.Module):
     #             raise RuntimeError(f"缓存目录中没有找到模型文件: {cache_dir}")
 
     def _load_clip_model(self, model_name: str, pretrained: str):
-        """加载CLIP模型 - 优先从本地缓存加载TorchScript模型"""
+        """
+        加载CLIP模型 - 优先从本地缓存加载TorchScript模型
+        注意: TorchScript模型固定在cuda:0上
+        """
         import open_clip
         import torch
         from pathlib import Path
@@ -397,11 +400,12 @@ class GeoCLIP(nn.Module):
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"正在从本地加载CLIP模型: {model_name_converted}")
+        print(f"目标设备: {self.device}")
 
         # 定义标准的CLIP预处理pipeline
         standard_preprocess = transforms.Compose([
-            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
-            transforms.CenterCrop(224),
+            transforms.Resize(384, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.CenterCrop(384),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.48145466, 0.4578275, 0.40821073],
@@ -409,67 +413,245 @@ class GeoCLIP(nn.Module):
             )
         ])
 
-        # 1. 优先尝试加载本地的TorchScript模型(.pt文件)
+        # ========== 1. 优先加载本地TorchScript模型 ==========
         pt_files = list(cache_dir.glob(f"*{model_name_converted}*.pt"))
         if not pt_files:
             pt_files = list(cache_dir.glob("*.pt"))
 
         if pt_files:
             print(f"发现本地TorchScript模型: {pt_files[0]}")
-            try:
-                jit_model = torch.jit.load(str(pt_files[0]), map_location=self.device)
-                jit_model.eval()
 
-                # 为TorchScript模型创建包装器,添加缺失的属性
-                class TorchScriptWrapper:
-                    def __init__(self, jit_model, device):
-                        self.model = jit_model
-                        self.device = device
-                        # 尝试推断或设置默认属性
-                        self.width = 768  # ViT-B默认宽度,可根据实际模型调整
-                        self.visual = self  # 某些代码可能访问model.visual
+            # 检查GPU可用性
+            if not torch.cuda.is_available():
+                print("❌ TorchScript模型需要GPU，但系统无GPU可用")
+                print("跳过TorchScript加载，尝试其他方式...")
+            else:
+                try:
+                    print("⚠️ TorchScript模型固定在cuda:0")
+                    print("正在加载模型到cuda:0...")
 
-                        # 添加transformer属性模拟
-                        class TransformerProxy:
-                            def __init__(self, width):
-                                self.width = width
+                    # 强制加载到cuda:0（因为模型内部硬编码了cuda:0）
+                    jit_model = torch.jit.load(str(pt_files[0]), map_location='cuda:0')
+                    jit_model = jit_model.cuda(0)
+                    jit_model.eval()
 
-                        self.transformer = TransformerProxy(self.width)
+                    print("✓ TorchScript模型已加载到cuda:0")
 
-                    def encode_image(self, image):
-                        """图像编码方法"""
-                        return self.model.encode_image(image)
-
-                    def encode_text(self, text):
-                        """文本编码方法"""
-                        return self.model.encode_text(text)
-
-                    def __call__(self, *args, **kwargs):
-                        return self.model(*args, **kwargs)
-
-                    def to(self, device):
-                        self.model.to(device)
-                        return self
-
-                    def eval(self):
-                        self.model.eval()
-                        return self
-
-                    def __getattr__(self, name):
-                        # 转发其他属性访问到原始模型
+                    # 尝试推断模型期望的输入尺寸
+                    input_size = 384  # 默认值
+                    try:
+                        # 尝试从模型中获取输入尺寸信息
+                        test_input = torch.randn(1, 3, 384, 384).cuda(0)
+                        with torch.no_grad():
+                            jit_model.encode_image(test_input)
+                        input_size = 384
+                        print("✓ 模型输入尺寸: 384")
+                    except:
+                        # 尝试384
                         try:
-                            return getattr(self.model, name)
-                        except AttributeError:
-                            raise AttributeError(f"TorchScript模型没有属性: {name}")
+                            test_input = torch.randn(1, 3, 384, 384).cuda(0)
+                            with torch.no_grad():
+                                jit_model.encode_image(test_input)
+                            input_size = 384
+                            print("✓ 模型输入尺寸: 384x384")
+                        except:
+                            print("⚠️ 无法自动检测输入尺寸，使用默认224")
+                            input_size = 224
 
-                model = TorchScriptWrapper(jit_model, self.device)
-                self.preprocess = standard_preprocess
-                print("✓ 成功加载本地TorchScript模型(已添加兼容层)")
-                return model
-            except Exception as e:
-                print(f"✗ 加载TorchScript模型失败: {e}")
+                    # 根据检测到的尺寸更新预处理
+                    standard_preprocess = transforms.Compose([
+                        transforms.Resize(input_size, interpolation=transforms.InterpolationMode.BICUBIC),
+                        transforms.CenterCrop(input_size),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.48145466, 0.4578275, 0.40821073],
+                            std=[0.26862954, 0.26130258, 0.27577711]
+                        )
+                    ])
 
-        # 2. 尝试使用open_clip从本地缓存加载预训练权重
+                    # ========== TorchScript包装器 ==========
+                    class TorchScriptWrapper(torch.nn.Module):
+                        """
+                        TorchScript模型包装器
+                        - 添加CLIP标准属性(width, transformer, visual)
+                        - 自动处理设备转换(所有输入转到cuda:0)
+                        - 固定在cuda:0，忽略其他设备请求
+                        """
+
+                        def __init__(self, jit_model, input_size=384):
+                            super().__init__()
+                            self.model = jit_model
+                            self.device = torch.device('cuda:0')
+                            self.input_size = input_size
+
+                            # CLIP标准属性
+                            self.width = 768  # ViT-B默认，可根据实际调整
+                            self.visual = self
+
+                            # transformer属性（用于获取特征维度）
+                            class TransformerProxy:
+                                def __init__(self, width):
+                                    self.width = width
+
+                            self.transformer = TransformerProxy(self.width)
+
+                        def encode_image(self, image):
+                            """
+                            图像编码 - 自动确保输入在cuda:0并检查尺寸
+                            Args:
+                                image: 输入图像张量，任意设备
+                            Returns:
+                                特征张量，在cuda:0上
+                            """
+                            # 确保输入在cuda:0
+                            if not image.is_cuda:
+                                image = image.cuda(0)
+                            elif image.device.index != 0:
+                                image = image.cuda(0)
+
+                            # 检查输入尺寸
+                            if image.shape[-2:] != (self.input_size, self.input_size):
+                                print(f"⚠️ 输入尺寸不匹配: 期望{self.input_size}x{self.input_size}, "
+                                      f"实际{image.shape[-2]}x{image.shape[-1]}")
+                                # 尝试自动resize
+                                import torch.nn.functional as F
+                                image = F.interpolate(
+                                    image,
+                                    size=(self.input_size, self.input_size),
+                                    mode='bicubic',
+                                    align_corners=False
+                                )
+                                print(f"✓ 已自动调整到{self.input_size}x{self.input_size}")
+
+                            # 调用模型
+                            try:
+                                if hasattr(self.model, 'encode_image'):
+                                    return self.model.encode_image(image)
+                                else:
+                                    return self.model(image)
+                            except RuntimeError as e:
+                                if "should be the same" in str(e):
+                                    print(f"❌ 设备类型不匹配: {e}")
+                                    print(f"这通常意味着模型导出时存在问题")
+                                    print(f"建议重新导出TorchScript模型")
+                                raise
+
+                        def encode_text(self, text):
+                            """
+                            文本编码 - 自动确保输入在cuda:0
+                            Args:
+                                text: 文本token张量，任意设备
+                            Returns:
+                                特征张量，在cuda:0上
+                            """
+                            # 确保输入在cuda:0
+                            if not text.is_cuda:
+                                text = text.cuda(0)
+                            elif text.device.index != 0:
+                                text = text.cuda(0)
+
+                            if hasattr(self.model, 'encode_text'):
+                                return self.model.encode_text(text)
+                            else:
+                                raise AttributeError("TorchScript模型没有encode_text方法")
+
+                        def forward(self, image):
+                            """前向传播"""
+                            return self.encode_image(image)
+
+                        def __call__(self, *args, **kwargs):
+                            """支持直接调用"""
+                            if len(args) == 1 and isinstance(args[0], torch.Tensor):
+                                return self.forward(args[0])
+                            return self.model(*args, **kwargs)
+
+                        def to(self, device):
+                            """
+                            设备转换 - TorchScript模型固定在cuda:0
+                            忽略其他设备请求，返回self保持链式调用
+                            """
+                            device_str = str(device)
+                            if device_str != 'cuda:0' and device_str != 'cuda':
+                                print(f"⚠️ TorchScript模型固定在cuda:0，忽略to({device})请求")
+                            return self
+
+                        def cuda(self, device=None):
+                            """CUDA转换 - 已在cuda:0"""
+                            if device is not None and device != 0:
+                                print(f"⚠️ TorchScript模型固定在cuda:0，忽略cuda({device})请求")
+                            return self
+
+                        def cpu(self):
+                            """CPU转换 - 不支持"""
+                            print(f"⚠️ TorchScript模型固定在cuda:0，不支持转到CPU")
+                            return self
+
+                        def eval(self):
+                            """设置为评估模式"""
+                            self.model.eval()
+                            return self
+
+                        def train(self, mode=True):
+                            """设置训练/评估模式"""
+                            if mode:
+                                self.model.train()
+                            else:
+                                self.model.eval()
+                            return self
+
+                        def parameters(self):
+                            """返回模型参数"""
+                            return self.model.parameters()
+
+                        def named_parameters(self):
+                            """返回命名参数"""
+                            if hasattr(self.model, 'named_parameters'):
+                                return self.model.named_parameters()
+                            return []
+
+                        def state_dict(self):
+                            """返回状态字典"""
+                            if hasattr(self.model, 'state_dict'):
+                                return self.model.state_dict()
+                            return {}
+
+                        def __getattr__(self, name):
+                            """转发属性访问到原始模型"""
+                            try:
+                                return super().__getattr__(name)
+                            except AttributeError:
+                                try:
+                                    return getattr(self.model, name)
+                                except AttributeError:
+                                    raise AttributeError(
+                                        f"TorchScript模型没有属性: {name}"
+                                    )
+
+                    # 创建包装器
+                    model = TorchScriptWrapper(jit_model, input_size)
+                    self.preprocess = standard_preprocess
+
+                    # 输出信息
+                    print("✓ 成功加载TorchScript模型")
+                    print(f"✓ 模型固定在: cuda:0")
+                    print(f"✓ 输入尺寸: {input_size}x{input_size}")
+                    print(f"✓ 特征维度: {model.width}")
+
+                    # 警告信息
+                    if self.device != torch.device('cuda:0') and self.device != torch.device('cuda'):
+                        print(f"⚠️ 注意: 您指定的设备是 {self.device}")
+                        print(f"⚠️ 但TorchScript模型将保持在cuda:0")
+                        print(f"⚠️ 所有输入将自动转移到cuda:0进行处理")
+
+                    return model
+
+                except Exception as e:
+                    print(f"✗ 加载TorchScript模型失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    print("尝试其他加载方式...")
+
+        # ========== 2. 使用open_clip加载预训练模型 ==========
         try:
             print("尝试使用open_clip加载预训练模型...")
             model, _, preprocess = open_clip.create_model_and_transforms(
@@ -480,13 +662,13 @@ class GeoCLIP(nn.Module):
             model = model.to(self.device)
             model.eval()
             self.preprocess = preprocess
-            print("✓ 成功加载open_clip预训练模型")
+            print(f"✓ 成功加载open_clip预训练模型到 {self.device}")
             return model
         except Exception as e:
             print(f"✗ open_clip加载失败: {e}")
 
-        # 3. 最后回退: 创建无预训练权重的模型
-        print("⚠ 回退到无预训练权重模型")
+        # ========== 3. 创建无预训练权重的模型 ==========
+        print("⚠️ 回退到无预训练权重模型")
         try:
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name_converted,
@@ -495,9 +677,9 @@ class GeoCLIP(nn.Module):
             model = model.to(self.device)
             model.eval()
 
-            # 使用标准预处理或open_clip提供的预处理
             self.preprocess = preprocess if preprocess is not None else standard_preprocess
-            print("✓ 成功创建无预训练权重模型(需要重新训练)")
+            print(f"✓ 成功创建无预训练权重模型到 {self.device}")
+            print("⚠️ 此模型需要重新训练才能正常使用")
             return model
         except Exception as e:
             print(f"✗ 创建模型失败: {e}")

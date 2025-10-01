@@ -7,7 +7,6 @@ import warnings
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-import os
 import sys
 import argparse
 import json
@@ -16,7 +15,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from pathlib import Path
 import numpy as np
-from tqdm import tqdm
 
 # 添加AdaCLIP路径到Python路径 (用于导入AdaCLIP的数据集)
 current_dir = Path(__file__).parent.absolute()
@@ -24,7 +22,7 @@ if current_dir not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 # GeoCLIP组件导入
-from geoclip.models.geoclip import create_geoclip_model
+from geoclip.models.geoclip_main import create_geoclip_model
 from geoclip.training.trainer import create_trainer
 from geoclip.training.losses import create_loss_function
 from geoclip.datasets.adaclip_adapter import create_geoclip_dataset
@@ -115,7 +113,7 @@ def create_data_loaders(args, model_transforms=None):
                 training=True,
                 cache_depth=True,
                 preprocess_all=preprocess_depth,
-                depth_cache_dir=f'./depth_cache_{dataset_name}'
+                depth_cache_dir=f'./depth_cache/{dataset_name}'
             )
 
             train_datasets.append(train_dataset)
@@ -149,7 +147,7 @@ def create_data_loaders(args, model_transforms=None):
                 training=False,
                 cache_depth=True,
                 preprocess_all=False,  # 测试集不预处理
-                depth_cache_dir=f'./depth_cache_{dataset_name}'
+                depth_cache_dir=f'./depth_cache/{dataset_name}'
             )
 
             test_datasets.append(test_dataset)

@@ -102,39 +102,91 @@ class DepthEstimator(nn.Module):
                                    std=[0.229, 0.224, 0.225])
             ])
 
-    def _preprocess_image(self, image: torch.Tensor) -> torch.Tensor:
+    def _preprocess_image(self, image) -> torch.Tensor:
         """预处理输入图像"""
-        if image.dim() == 3:
-            image = image.unsqueeze(0)
 
-        # 如果是PIL图像或numpy数组，转换为tensor
+        # 第一步：先处理类型转换，确保是tensor
         if not isinstance(image, torch.Tensor):
             if hasattr(image, 'convert'):  # PIL Image
                 from torchvision.transforms import ToTensor
                 image = ToTensor()(image.convert('RGB'))
             elif isinstance(image, np.ndarray):
                 image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+            else:
+                raise TypeError(f"不支持的图像类型: {type(image)}")
 
-        # 确保在正确设备上
+        # 第二步：现在安全地处理维度
+        if image.dim() == 3:
+            image = image.unsqueeze(0)
+
+        # 第三步：确保在正确设备上
         image = image.to(self.device)
 
-        # 应用变换
+        # 第四步：应用变换
         if hasattr(self.transform, '__call__'):
-            # 对批次中每个图像单独应用变换
             if image.dim() == 4:
                 processed_images = []
                 for i in range(image.size(0)):
                     img = image[i]
-                    # 如果是归一化的tensor，需要转换为PIL格式
-                    if img.max() <= 1.0:
-                        img_pil = transforms.ToPILImage()(img)
-                        processed_img = self.transform(img_pil)
+
+                    # 转换为numpy数组传递给MiDaS transform
+                    img_numpy = img.permute(1, 2, 0).cpu().numpy()
+                    if img_numpy.max() <= 1.0:
+                        img_numpy = (img_numpy * 255).astype(np.uint8)
                     else:
-                        processed_img = self.transform(img)
-                    processed_images.append(processed_img)
-                return torch.stack(processed_images)
+                        img_numpy = img_numpy.astype(np.uint8)
+
+                    # 调用MiDaS transform
+                    processed_img = self.transform(img_numpy)
+
+                    # 确保返回的是正确格式的tensor
+                    if isinstance(processed_img, dict):
+                        # MiDaS transform可能返回字典
+                        processed_img = processed_img.get('image', processed_img)
+
+                    if not isinstance(processed_img, torch.Tensor):
+                        processed_img = torch.from_numpy(processed_img).float()
+
+                    # 确保是3维 [C, H, W]
+                    if processed_img.dim() == 2:
+                        processed_img = processed_img.unsqueeze(0)
+                    elif processed_img.dim() == 4:
+                        processed_img = processed_img.squeeze(0)
+
+                    processed_images.append(processed_img.to(self.device))
+
+                result = torch.stack(processed_images)
+
+                # 最终检查：确保是4维 [B, C, H, W]
+                if result.dim() != 4:
+                    raise ValueError(f"预处理后维度错误: {result.shape}, 期望4维 [B, C, H, W]")
+
+                return result
             else:
-                return self.transform(image)
+                # 单个图像的情况
+                img_numpy = image[0].permute(1, 2, 0).cpu().numpy()
+                if img_numpy.max() <= 1.0:
+                    img_numpy = (img_numpy * 255).astype(np.uint8)
+                else:
+                    img_numpy = img_numpy.astype(np.uint8)
+
+                processed_img = self.transform(img_numpy)
+
+                if isinstance(processed_img, dict):
+                    processed_img = processed_img.get('image', processed_img)
+
+                if not isinstance(processed_img, torch.Tensor):
+                    processed_img = torch.from_numpy(processed_img).float()
+
+                if processed_img.dim() == 2:
+                    processed_img = processed_img.unsqueeze(0)
+                elif processed_img.dim() == 4:
+                    processed_img = processed_img.squeeze(0)
+
+                if processed_img.dim() == 3:
+                    processed_img = processed_img.unsqueeze(0)
+
+                return processed_img.to(self.device)
         else:
             return image
 

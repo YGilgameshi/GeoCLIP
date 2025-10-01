@@ -150,7 +150,7 @@ def get_dataset(dataset_name: str,
         training=training,
         cache_depth=cache_depth,
         preprocess_all=preprocess_all,
-        depth_cache_dir=kwargs.get('depth_cache_dir', f'./depth_cache_{dataset_name}'),
+        depth_cache_dir=kwargs.get('depth_cache_dir', f'./depth_cache/{dataset_name}'),
         **kwargs
     )
 

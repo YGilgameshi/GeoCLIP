@@ -28,7 +28,7 @@ if not DATA_ROOT.exists():
 # ================================
 
 # 工业异常检测数据集
-MVTEC_ROOT = DATA_ROOT / 'MVTec_AD'
+MVTEC_ROOT = DATA_ROOT / 'mvtec_anomaly_detection'
 VISA_ROOT = DATA_ROOT / 'VisA'
 BTAD_ROOT = DATA_ROOT / 'BTAD'
 MPDD_ROOT = DATA_ROOT / 'MPDD'

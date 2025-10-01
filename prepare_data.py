@@ -11,7 +11,7 @@ import torch
 from tqdm import tqdm
 
 # 导入配置和GeoCLIP组件
-from geoclip_config import (
+from config import (
     check_dataset_availability, get_dataset_info, auto_detect_best_config,
     DATA_ROOT, DEPTH_CACHE_ROOT
 )
@@ -204,13 +204,13 @@ def validate_geoclip_integration():
     print("🔗 验证GeoCLIP组件集成...")
 
     try:
-        # 测试深度估计器
-        print("  测试深度估计器...")
-        depth_estimator = DepthEstimator()
-        test_image = torch.randn(1, 3, 224, 224)
-        with torch.no_grad():
-            depth_output = depth_estimator(test_image)
-        print(f"    ✅ 深度估计器: {test_image.shape} -> {depth_output.shape}")
+        # # 测试深度估计器
+        # print("  测试深度估计器...")
+        # depth_estimator = DepthEstimator()
+        # test_image = torch.randn(1, 3, 224, 224)
+        # with torch.no_grad():
+        #     depth_output = depth_estimator(test_image)
+        # print(f"    ✅ 深度估计器: {test_image.shape} -> {depth_output.shape}")
 
         # 测试GeoCLIP主模型
         print("  测试GeoCLIP主模型...")

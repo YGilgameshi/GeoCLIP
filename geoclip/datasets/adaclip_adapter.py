@@ -201,6 +201,39 @@ class AdaCLIPToGeoCLIPAdapter:
         cache_filename = f"depth_{path_hash}.npy"
         return str(self.depth_cache_dir / cache_filename)
 
+    # def estimate_or_load_depth(self, image_path: str, image: np.ndarray = None) -> np.ndarray:
+    #     """估计或加载缓存的深度图"""
+    #     cache_path = self.get_depth_cache_path(image_path)
+    #
+    #     # 尝试从缓存加载
+    #     if self.cache_depth and os.path.exists(cache_path):
+    #         try:
+    #             depth = np.load(cache_path)
+    #             return depth.astype(np.float32)
+    #         except Exception as e:
+    #             print(f"加载缓存失败 {cache_path}: {e}")
+    #
+    #     # 如果没有提供图像，从路径加载
+    #     if image is None:
+    #         if not os.path.exists(image_path):
+    #             raise FileNotFoundError(f"图像文件不存在: {image_path}")
+    #         image = cv2.imread(image_path)
+    #         if image is None:
+    #             raise ValueError(f"无法读取图像: {image_path}")
+    #         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    #
+    #     # 估计深度
+    #     depth = self.estimate_depth(image)
+    #
+    #     # 保存到缓存
+    #     if self.cache_depth:
+    #         try:
+    #             np.save(cache_path, depth)
+    #         except Exception as e:
+    #             print(f"保存缓存失败 {cache_path}: {e}")
+    #
+    #     return depth
+
     def estimate_or_load_depth(self, image_path: str, image: np.ndarray = None) -> np.ndarray:
         """估计或加载缓存的深度图"""
         cache_path = self.get_depth_cache_path(image_path)
@@ -217,10 +250,18 @@ class AdaCLIPToGeoCLIPAdapter:
         if image is None:
             if not os.path.exists(image_path):
                 raise FileNotFoundError(f"图像文件不存在: {image_path}")
-            image = cv2.imread(image_path)
-            if image is None:
-                raise ValueError(f"无法读取图像: {image_path}")
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            # 使用PIL加载图像，更稳定
+            try:
+                from PIL import Image
+                pil_image = Image.open(image_path).convert('RGB')
+                image = np.array(pil_image)
+            except Exception:
+                # 回退到OpenCV
+                image = cv2.imread(image_path)
+                if image is None:
+                    raise ValueError(f"无法读取图像: {image_path}")
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # 估计深度
         depth = self.estimate_depth(image)
@@ -228,44 +269,131 @@ class AdaCLIPToGeoCLIPAdapter:
         # 保存到缓存
         if self.cache_depth:
             try:
+                # 确保缓存目录存在
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
                 np.save(cache_path, depth)
             except Exception as e:
                 print(f"保存缓存失败 {cache_path}: {e}")
 
         return depth
 
-    def estimate_depth(self, image: np.ndarray) -> np.ndarray:
+    # def estimate_depth(self, image) -> np.ndarray:
+    #     """使用深度估计器估计深度"""
+    #     try:
+    #         # 第一步：确保转换为numpy数组
+    #         if hasattr(image, 'convert'):  # PIL Image
+    #             image = np.array(image.convert('RGB'))
+    #         elif isinstance(image, str):  # 文件路径
+    #             import cv2
+    #             image = cv2.imread(image)
+    #             if image is None:
+    #                 raise ValueError(f"无法读取图像: {image}")
+    #             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    #
+    #         # 确保此时image确实是numpy数组
+    #         if not isinstance(image, np.ndarray):
+    #             raise TypeError(f"图像转换失败，当前类型: {type(image)}")
+    #
+    #         # 第二步：标准化图像格式
+    #         if len(image.shape) == 2:  # 灰度图
+    #             image = np.stack([image, image, image], axis=2)  # 转为RGB
+    #         elif len(image.shape) == 3 and image.shape[2] == 1:  # 单通道
+    #             image = np.repeat(image, 3, axis=2)
+    #         elif len(image.shape) == 3 and image.shape[2] == 4:  # RGBA
+    #             image = image[:, :, :3]  # 去掉alpha通道
+    #
+    #         # 确保是3通道RGB
+    #         if len(image.shape) != 3 or image.shape[2] != 3:
+    #             raise ValueError(f"图像格式错误: {image.shape}")
+    #
+    #         # 第三步：转换为torch tensor
+    #         if image.dtype == np.uint8:
+    #             # 先转换为float，再除以255
+    #             image_float = image.astype(np.float32) / 255.0
+    #             image_tensor = torch.from_numpy(image_float).permute(2, 0, 1)
+    #         else:
+    #             # 已经是float类型
+    #             image_tensor = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)
+    #
+    #         # 第四步：添加batch维度并移到设备
+    #         image_tensor = image_tensor.unsqueeze(0).to(self.device)
+    #
+    #         # 第五步：深度估计
+    #         with torch.no_grad():
+    #             depth_tensor = self.depth_estimator(image_tensor)
+    #
+    #         # 第六步：转换回numpy
+    #         if depth_tensor.dim() == 4:
+    #             depth = depth_tensor[0, 0].cpu().numpy()
+    #         elif depth_tensor.dim() == 3:
+    #             depth = depth_tensor[0].cpu().numpy()
+    #         else:
+    #             depth = depth_tensor.cpu().numpy()
+    #
+    #         return depth.astype(np.float32)
+    #
+    #     except Exception as e:
+    #         print(f"深度估计失败: {e}")
+    #         import traceback
+    #         traceback.print_exc()  # 打印完整错误信息用于调试
+    #
+    #         # 返回默认深度图
+    #         try:
+    #             if isinstance(image, np.ndarray) and len(image.shape) >= 2:
+    #                 h, w = image.shape[:2]
+    #             else:
+    #                 h, w = 256, 256
+    #             return np.ones((h, w), dtype=np.float32)
+    #         except:
+    #             return np.ones((256, 256), dtype=np.float32)
+
+    def estimate_depth(self, image) -> np.ndarray:
         """使用深度估计器估计深度"""
         try:
-            # 预处理图像
-            if len(image.shape) == 3:
-                # RGB图像
-                if image.dtype == np.uint8:
-                    image_tensor = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
-                else:
-                    image_tensor = torch.from_numpy(image).permute(2, 0, 1).float()
+            # 统一转换为numpy数组
+            if hasattr(image, 'convert'):  # PIL Image
+                image = np.array(image.convert('RGB'))
+            elif isinstance(image, str):  # 文件路径
+                import cv2
+                image = cv2.imread(image)
+                if image is None:
+                    raise ValueError(f"无法读取图像: {image}")
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            if not isinstance(image, np.ndarray):
+                raise TypeError(f"不支持的图像类型: {type(image)}")
+
+            # 确保图像格式正确
+            if len(image.shape) == 2:
+                image = np.stack([image, image, image], axis=2)
+            elif len(image.shape) == 3 and image.shape[2] != 3:
+                if image.shape[2] == 1:
+                    image = np.repeat(image, 3, axis=2)
+                elif image.shape[2] == 4:
+                    image = image[:, :, :3]
+
+            # 直接使用numpy数组，转换为tensor
+            if image.dtype == np.uint8:
+                image_float = image.astype(np.float32) / 255.0
             else:
-                # 灰度图像
-                if image.dtype == np.uint8:
-                    image_tensor = torch.from_numpy(image).float() / 255.0
-                else:
-                    image_tensor = torch.from_numpy(image).float()
+                image_float = image.astype(np.float32)
 
-                # 扩展到3通道
-                if len(image_tensor.shape) == 2:
-                    image_tensor = image_tensor.unsqueeze(0).repeat(3, 1, 1)
-
-            # 添加batch维度
-            image_tensor = image_tensor.unsqueeze(0)
+            # 转换为tensor
+            image_tensor = torch.from_numpy(image_float).permute(2, 0, 1).unsqueeze(0)
             image_tensor = image_tensor.to(self.device)
 
-            # 深度估计
+            # 调用深度估计器
             with torch.no_grad():
                 depth_tensor = self.depth_estimator(image_tensor)
 
+            # 确保是tensor后再调用dim()
+            if not isinstance(depth_tensor, torch.Tensor):
+                # 如果不是tensor，尝试转换
+                depth_tensor = torch.tensor(depth_tensor)
+
             # 转换回numpy
             if depth_tensor.dim() == 4:
-                depth = depth_tensor[0, 0].cpu().numpy()  # [H, W]
+                depth = depth_tensor[0, 0].cpu().numpy()
             elif depth_tensor.dim() == 3:
                 depth = depth_tensor[0].cpu().numpy()
             else:
@@ -275,9 +403,12 @@ class AdaCLIPToGeoCLIPAdapter:
 
         except Exception as e:
             print(f"深度估计失败: {e}")
-            # 返回零深度图作为fallback
-            h, w = image.shape[:2]
-            return np.zeros((h, w), dtype=np.float32)
+            import traceback
+            traceback.print_exc()
+
+            h, w = (image.shape[:2] if isinstance(image, np.ndarray) and len(image.shape) >= 2
+                    else (256, 256))
+            return np.ones((h, w), dtype=np.float32)
 
     def preprocess_dataset(self, dataset_class, dataset_config: Dict[str, Any]) -> Dict[str, int]:
         """
@@ -519,7 +650,7 @@ def create_geoclip_dataset(dataset_name: str,
     if root is None:
         root = default_root
     if depth_cache_dir is None:
-        depth_cache_dir = f"./depth_cache_{dataset_name}"
+        depth_cache_dir = f"./depth_cache/{dataset_name}"
 
     # 创建适配器
     adapter = AdaCLIPToGeoCLIPAdapter(
@@ -549,7 +680,7 @@ def create_geoclip_dataset(dataset_name: str,
         training=training,
         depth_adapter=adapter,
         **{k: v for k, v in kwargs.items()
-           if k not in ['cache_depth', 'depth_cache_dir']}
+           if k not in ['cache_depth', 'depth_cache_dir','depth_adapter']}
     )
 
     return dataset

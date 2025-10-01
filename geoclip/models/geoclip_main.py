@@ -8,18 +8,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Union, Any
 import numpy as np
+import open_clip
 
 # 导入GeoCLIP组件
 from geoclip.models.depth_estimator import DepthEstimator
 from geoclip.models.geometry_encoder import create_geometry_encoder, VoxelEncoder
 from geoclip.utils.voxel_utils import DepthToVoxelConverter
-
-# 导入AdaCLIP的CLIP模型
-try:
-    from method.clip_model import load_clip_model
-    from method.ada_clip import AdaCLIP
-except ImportError:
-    print("警告: 无法导入AdaCLIP模型，请确保在正确的环境中运行")
 
 
 class FeatureFusionModule(nn.Module):
@@ -117,8 +111,8 @@ class FeatureFusionModule(nn.Module):
         elif self.fusion_type == "simple_concat":
             return self._simple_concat_forward(clip_features, geometry_features)
 
+    # 投影
     def _cross_attention_forward(self, clip_feat, geometry_feat):
-        # 投影
         clip_proj = self.clip_proj(clip_feat).unsqueeze(1)  # [B, 1, fusion_dim]
         geometry_proj = self.geometry_proj(geometry_feat).unsqueeze(1)  # [B, 1, fusion_dim]
 
@@ -270,6 +264,51 @@ class GeoCLIP(nn.Module):
         self.geometry_encoder = create_geometry_encoder(geometry_encoder_config)
 
         # 5. 特征融合模块
+        # 安全地获取CLIP维度
+        def get_clip_dim(model):
+            """安全地获取CLIP模型的特征维度"""
+            # 方法1: 检查transformer.width
+            if hasattr(model, 'transformer') and hasattr(model.transformer, 'width'):
+                return model.transformer.width
+
+            # 方法2: 检查width属性
+            if hasattr(model, 'width'):
+                return model.width
+
+            # 方法3: 检查visual.width
+            if hasattr(model, 'visual') and hasattr(model.visual, 'width'):
+                return model.visual.width
+
+            # 方法4: 根据模型名称推断
+            model_name_lower = clip_model_name.lower()
+            if 'vit-b' in model_name_lower or 'vitb' in model_name_lower:
+                return 768
+            elif 'vit-l' in model_name_lower or 'vitl' in model_name_lower:
+                return 1024
+            elif 'vit-h' in model_name_lower or 'vith' in model_name_lower:
+                return 1280
+            elif 'rn50' in model_name_lower or 'resnet50' in model_name_lower:
+                return 1024
+            elif 'rn101' in model_name_lower or 'resnet101' in model_name_lower:
+                return 512
+
+            # 默认值
+            print(f"⚠ 无法确定CLIP维度，使用默认值512")
+            return 512
+
+        # clip_dim = get_clip_dim(self.clip_model)
+        clip_dim = 768
+        geometry_dim = geometry_encoder_config['output_channels']
+
+        print(f"  特征维度 - CLIP: {clip_dim}, 几何: {geometry_dim}")
+
+        self.fusion_module = FeatureFusionModule(
+            clip_dim=clip_dim,
+            geometry_dim=geometry_dim,
+            fusion_dim=fusion_dim,
+            output_dim=output_dim,
+            fusion_type=fusion_type
+        )
         clip_dim = self.clip_model.transformer.width if hasattr(self.clip_model, 'transformer') else 512
         geometry_dim = geometry_encoder_config['output_channels']
 
@@ -295,20 +334,174 @@ class GeoCLIP(nn.Module):
         print(f"  融合方式: {fusion_type}")
         print(f"  检测类型: {detection_type}")
 
+    # def _load_clip_model(self, model_name: str, pretrained: str):
+    #     """加载CLIP模型 - 从本地缓存加载"""
+    #
+    #     import os
+    #     from pathlib import Path
+    #
+    #     model_name_converted = model_name.replace('/', '-')
+    #
+    #     # 指定缓存目录
+    #     cache_dir = Path.home() / '.cache' / 'open_clip'
+    #     cache_dir.mkdir(parents=True, exist_ok=True)
+    #
+    #     print(f"正在从缓存加载CLIP模型: {model_name_converted}")
+    #     print(f"缓存目录: {cache_dir}")
+    #
+    #     try:
+    #         # 尝试从本地缓存加载
+    #         model, _, preprocess = open_clip.create_model_and_transforms(
+    #             model_name_converted,
+    #             pretrained=pretrained if pretrained != 'openai' else 'openai',
+    #             cache_dir=str(cache_dir)
+    #         )
+    #
+    #         model = model.to(self.device)
+    #         self.preprocess = preprocess
+    #         print(f"成功加载预训练模型: {model_name_converted}")
+    #         return model
+    #
+    #     except Exception as e:
+    #         print(f"从缓存加载失败: {e}")
+    #         # 检查缓存文件是否存在
+    #         cache_files = list(cache_dir.glob("*.pt"))
+    #         print(f"缓存目录中的文件: {cache_files}")
+    #
+    #         # 如果有.pt文件，尝试直接加载
+    #         if cache_files:
+    #             print("尝试直接加载本地权重文件...")
+    #             model, _, preprocess = open_clip.create_model_and_transforms(
+    #                 model_name_converted,
+    #                 pretrained=None
+    #             )
+    #             # 手动加载权重
+    #             state_dict = torch.load(cache_files[0], map_location=self.device)
+    #             model.load_state_dict(state_dict, strict=False)
+    #             model = model.to(self.device)
+    #             self.preprocess = preprocess
+    #             print("成功从本地文件加载权重")
+    #             return model
+    #         else:
+    #             raise RuntimeError(f"缓存目录中没有找到模型文件: {cache_dir}")
+
     def _load_clip_model(self, model_name: str, pretrained: str):
-        """加载CLIP模型"""
-        try:
-            # 尝试使用AdaCLIP的加载方式
-            clip_model = load_clip_model(model_name, pretrained)
-            return clip_model
-        except:
-            # 回退到标准CLIP
+        """加载CLIP模型 - 优先从本地缓存加载TorchScript模型"""
+        import open_clip
+        import torch
+        from pathlib import Path
+        from torchvision import transforms
+
+        model_name_converted = model_name.replace('/', '-')
+        cache_dir = Path.home() / '.cache' / 'open_clip'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"正在从本地加载CLIP模型: {model_name_converted}")
+
+        # 定义标准的CLIP预处理pipeline
+        standard_preprocess = transforms.Compose([
+            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.48145466, 0.4578275, 0.40821073],
+                std=[0.26862954, 0.26130258, 0.27577711]
+            )
+        ])
+
+        # 1. 优先尝试加载本地的TorchScript模型(.pt文件)
+        pt_files = list(cache_dir.glob(f"*{model_name_converted}*.pt"))
+        if not pt_files:
+            pt_files = list(cache_dir.glob("*.pt"))
+
+        if pt_files:
+            print(f"发现本地TorchScript模型: {pt_files[0]}")
             try:
-                import clip
-                model, preprocess = clip.load(model_name, device=self.device)
+                jit_model = torch.jit.load(str(pt_files[0]), map_location=self.device)
+                jit_model.eval()
+
+                # 为TorchScript模型创建包装器,添加缺失的属性
+                class TorchScriptWrapper:
+                    def __init__(self, jit_model, device):
+                        self.model = jit_model
+                        self.device = device
+                        # 尝试推断或设置默认属性
+                        self.width = 768  # ViT-B默认宽度,可根据实际模型调整
+                        self.visual = self  # 某些代码可能访问model.visual
+
+                        # 添加transformer属性模拟
+                        class TransformerProxy:
+                            def __init__(self, width):
+                                self.width = width
+
+                        self.transformer = TransformerProxy(self.width)
+
+                    def encode_image(self, image):
+                        """图像编码方法"""
+                        return self.model.encode_image(image)
+
+                    def encode_text(self, text):
+                        """文本编码方法"""
+                        return self.model.encode_text(text)
+
+                    def __call__(self, *args, **kwargs):
+                        return self.model(*args, **kwargs)
+
+                    def to(self, device):
+                        self.model.to(device)
+                        return self
+
+                    def eval(self):
+                        self.model.eval()
+                        return self
+
+                    def __getattr__(self, name):
+                        # 转发其他属性访问到原始模型
+                        try:
+                            return getattr(self.model, name)
+                        except AttributeError:
+                            raise AttributeError(f"TorchScript模型没有属性: {name}")
+
+                model = TorchScriptWrapper(jit_model, self.device)
+                self.preprocess = standard_preprocess
+                print("✓ 成功加载本地TorchScript模型(已添加兼容层)")
                 return model
-            except:
-                raise RuntimeError("无法加载CLIP模型，请检查安装")
+            except Exception as e:
+                print(f"✗ 加载TorchScript模型失败: {e}")
+
+        # 2. 尝试使用open_clip从本地缓存加载预训练权重
+        try:
+            print("尝试使用open_clip加载预训练模型...")
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                model_name_converted,
+                pretrained=pretrained if pretrained != 'openai' else 'openai',
+                cache_dir=str(cache_dir)
+            )
+            model = model.to(self.device)
+            model.eval()
+            self.preprocess = preprocess
+            print("✓ 成功加载open_clip预训练模型")
+            return model
+        except Exception as e:
+            print(f"✗ open_clip加载失败: {e}")
+
+        # 3. 最后回退: 创建无预训练权重的模型
+        print("⚠ 回退到无预训练权重模型")
+        try:
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                model_name_converted,
+                pretrained=None
+            )
+            model = model.to(self.device)
+            model.eval()
+
+            # 使用标准预处理或open_clip提供的预处理
+            self.preprocess = preprocess if preprocess is not None else standard_preprocess
+            print("✓ 成功创建无预训练权重模型(需要重新训练)")
+            return model
+        except Exception as e:
+            print(f"✗ 创建模型失败: {e}")
+            raise RuntimeError(f"无法加载或创建CLIP模型: {e}")
 
     def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """

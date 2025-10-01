@@ -411,7 +411,7 @@ def main():
                         help="结果保存目录")
 
     # 模型配置
-    parser.add_argument("--model", type=str, default="ViT-L-14-336",
+    parser.add_argument("--model", type=str, default="ViT-B-16",
                         choices=["ViT-B-16", "ViT-B-32", "ViT-L-14", "ViT-L-14-336"],
                         help="CLIP模型选择")
 

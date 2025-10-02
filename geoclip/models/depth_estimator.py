@@ -11,6 +11,10 @@ import numpy as np
 from typing import Optional, Tuple, Union, List
 import timm
 import warnings
+from PIL import Image
+from typing import Union
+
+
 
 from torchvision import transforms
 warnings.filterwarnings("ignore")
@@ -190,40 +194,140 @@ class DepthEstimator(nn.Module):
         else:
             return image
 
-    def estimate_depth(self, image: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
+    # def estimate_depth(self, image: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     估计深度 - 自动处理尺寸转换
+    #
+    #     Args:
+    #         image: 输入图像 [B, 3, H, W] - 任意尺寸
+    #     Returns:
+    #         depth: 深度图 [B, 1, H, W] - 与输入相同尺寸
+    #     """
+    #     with torch.no_grad():
+    #         original_size = image.shape[-2:]
+    #
+    #         # 如果输入不是384，先resize
+    #         if original_size != self.input_size:
+    #             image_resized = F.interpolate(
+    #                 image,
+    #                 size=self.input_size,
+    #                 mode='bilinear',
+    #                 align_corners=False
+    #             )
+    #         else:
+    #             image_resized = image
+    #
+    #         # 深度估计（在384x384上）
+    #         depth = self.depth_model(image_resized)
+    #
+    #         # 处理维度
+    #         if depth.dim() == 3:
+    #             depth = depth.unsqueeze(1)
+    #         elif depth.dim() == 2:
+    #             depth = depth.unsqueeze(0).unsqueeze(1)
+    #
+    #         # resize回原始尺寸
+    #         if depth.shape[-2:] != original_size:
+    #             depth = F.interpolate(
+    #                 depth,
+    #                 size=original_size,
+    #                 mode='bilinear',
+    #                 align_corners=False
+    #             )
+    #
+    #         return depth
+
+    def estimate_depth(self, image: Union[torch.Tensor, np.ndarray, Image.Image]) -> torch.Tensor:
         """
-        估计图像深度
+        估计图像深度 - 支持PIL Image, numpy array, torch.Tensor
 
         Args:
-            image: 输入图像 [B, 3, H, W] 或 [3, H, W] 或 PIL Image 或 numpy array
+            image: 输入图像
+                - PIL.Image: RGB图像
+                - np.ndarray: [H, W, 3] 或 [B, H, W, 3]
+                - torch.Tensor: [B, 3, H, W] 或 [3, H, W]
 
         Returns:
             depth: 深度图 [B, 1, H, W]
         """
         with torch.no_grad():
-            # 预处理图像
-            processed_image = self._preprocess_image(image)
-            original_shape = processed_image.shape[-2:]
+            # ========== 步骤1: 统一转换为torch.Tensor ==========
+            if isinstance(image, Image.Image):
+                # PIL Image -> numpy -> tensor
+                image_np = np.array(image.convert('RGB'))
+                if image_np.dtype == np.uint8:
+                    image_np = image_np.astype(np.float32) / 255.0
+                # [H, W, 3] -> [1, 3, H, W]
+                image = torch.from_numpy(image_np).permute(2, 0, 1).unsqueeze(0)
+                image = image.to(self.device)
 
-            # 深度估计
-            depth = self.depth_model(processed_image)
+            elif isinstance(image, np.ndarray):
+                # numpy -> tensor
+                if image.dtype == np.uint8:
+                    image = image.astype(np.float32) / 255.0
 
-            # 后处理
+                if image.ndim == 3:  # [H, W, 3]
+                    image = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
+                elif image.ndim == 4:  # [B, H, W, 3]
+                    image = torch.from_numpy(image).permute(0, 3, 1, 2)
+                else:
+                    raise ValueError(f"不支持的numpy维度: {image.shape}")
+
+                image = image.to(self.device)
+
+            elif isinstance(image, torch.Tensor):
+                # 已经是tensor
+                if image.device != self.device:
+                    image = image.to(self.device)
+
+                if image.dim() == 3:  # [3, H, W]
+                    image = image.unsqueeze(0)
+                elif image.dim() != 4:
+                    raise ValueError(f"不支持的tensor维度: {image.shape}")
+            else:
+                raise TypeError(f"不支持的图像类型: {type(image)}")
+
+            # ========== 步骤2: 确保float32 ==========
+            if image.dtype != torch.float32:
+                image = image.float()
+
+            # ========== 步骤3: 获取原始尺寸（现在肯定有.shape了）==========
+            original_size = image.shape[-2:]
+
+            # ========== 步骤4: Resize到深度模型期望尺寸 ==========
+            if original_size != self.input_size:
+                image_resized = F.interpolate(
+                    image,
+                    size=self.input_size,
+                    mode='bilinear',
+                    align_corners=False
+                )
+            else:
+                image_resized = image
+
+            # ========== 步骤5: 深度估计 ==========
+            depth = self.depth_model(image_resized)
+
+            # ========== 步骤6: 后处理维度 ==========
             if depth.dim() == 3:
                 depth = depth.unsqueeze(1)
             elif depth.dim() == 2:
                 depth = depth.unsqueeze(0).unsqueeze(1)
 
-            # 如果输出尺寸与输入不同，调整大小
-            if depth.shape[-2:] != original_shape:
-                depth = F.interpolate(depth, size=original_shape,
-                                    mode='bilinear', align_corners=False)
+            # ========== 步骤7: Resize回原始尺寸 ==========
+            if depth.shape[-2:] != original_size:
+                depth = F.interpolate(
+                    depth,
+                    size=original_size,
+                    mode='bilinear',
+                    align_corners=False
+                )
 
-            return depth
+            return depth.float().to(self.device)
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
-        """前向传播"""
         return self.estimate_depth(image)
+
 
     def get_model_info(self) -> dict:
         """获取模型信息"""

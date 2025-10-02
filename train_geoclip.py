@@ -73,27 +73,35 @@ def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def create_data_loaders(args, model_transforms=None):
-    """
-    创建数据加载器，兼容AdaCLIP的数据集结构
-    """
-    print("🔄 创建数据加载器...")
+def create_data_loaders(args, model):
+    """创建数据加载器 - 使用CLIP的尺寸"""
+    from torchvision import transforms
 
-    # 设置默认transforms
-    if model_transforms is None:
-        import torchvision.transforms as transforms
-        model_transforms = {
-            'preprocess': transforms.Compose([
-                transforms.Resize((args.image_size, args.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-            ]),
-            'transform': transforms.Compose([
-                transforms.Resize((args.image_size, args.image_size)),
-                transforms.ToTensor()
-            ])
-        }
+    # 获取CLIP的输入尺寸
+    clip_size = model.clip_input_size
+    print(f"✓ 数据加载器将使用尺寸: {clip_size}x{clip_size}")
+
+    # CLIP预处理（RGB图像）
+    clip_preprocess = model.preprocess if hasattr(model, 'preprocess') else transforms.Compose([
+        transforms.Resize(clip_size, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(clip_size),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.48145466, 0.4578275, 0.40821073],
+            std=[0.26862954, 0.26130258, 0.27577711]
+        )
+    ])
+
+    # 辅助变换（深度图、掩码）
+    auxiliary_transform = transforms.Compose([
+        transforms.Resize((clip_size, clip_size)),
+        transforms.ToTensor()
+    ])
+
+    model_transforms = {
+        'preprocess': clip_preprocess,
+        'transform': auxiliary_transform
+    }
 
     # 创建训练数据集
     train_datasets = []
@@ -335,6 +343,8 @@ def train_geoclip(args):
 
     # 创建模型和训练配置
     model_config = create_model_config(args)
+    logger.info("✅ 模型创建成功")
+
     training_config = create_training_config(args)
     training_config['trainer']['experiment_name'] = paths['experiment_name']
 
@@ -351,8 +361,13 @@ def train_geoclip(args):
     logger.info(f"配置已保存: {paths['config_path']}")
 
     try:
+
+        logger.info("创建GeoCLIP模型...")
+        from geoclip.models.geoclip_main import create_geoclip_model
+        model = create_geoclip_model(model_config)  # ← 用配置创建模型
+        logger.info("✅ 模型创建成功")
         # 创建数据加载器
-        train_loader, test_loader = create_data_loaders(args)
+        train_loader, test_loader = create_data_loaders(args, model)
 
         # 创建训练器
         logger.info("创建GeoCLIP训练器...")
